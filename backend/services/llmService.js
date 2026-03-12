@@ -137,6 +137,84 @@ Journal entry: "${text}" [/INST]`;
     const unique = [...new Set(words)];
     return unique.slice(0, 5);
   }
+
+  /**
+   * Stream emotion analysis using HuggingFace API with SSE.
+   * Falls back to non-streaming result if API key is missing.
+   */
+  async analyzeEmotionStream(text, onChunk) {
+    if (!this.apiKey || this.apiKey === 'your_huggingface_api_key_here') {
+      const result = this.fallbackAnalysis(text);
+      onChunk(JSON.stringify(result), true);
+      return result;
+    }
+
+    try {
+      const prompt = `<s>[INST] Analyze the following journal entry. Respond ONLY in this exact format, nothing else:
+Emotion: <one word from: calm, happy, anxious, sad, peaceful, stressed, energized, reflective>
+Keywords: <comma-separated list of 3-5 keywords>
+Summary: <one sentence summary>
+
+Journal entry: "${text}" [/INST]`;
+
+      const response = await axios.post(
+        this.modelUrl,
+        {
+          inputs: prompt,
+          parameters: {
+            max_new_tokens: 150,
+            temperature: 0.3,
+            return_full_text: false
+          },
+          stream: true
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 30000,
+          responseType: 'stream'
+        }
+      );
+
+      let fullText = '';
+
+      return new Promise((resolve) => {
+        response.data.on('data', (chunk) => {
+          const piece = chunk.toString();
+          fullText += piece;
+          onChunk(piece, false);
+        });
+
+        response.data.on('end', () => {
+          try {
+            const parsed = JSON.parse(fullText);
+            const generatedText = parsed?.[0]?.generated_text || fullText;
+            const result = this.parseResponse(generatedText, text);
+            onChunk(JSON.stringify(result), true);
+            resolve(result);
+          } catch {
+            const result = this.parseResponse(fullText, text);
+            onChunk(JSON.stringify(result), true);
+            resolve(result);
+          }
+        });
+
+        response.data.on('error', (err) => {
+          console.error('Stream error:', err.message);
+          const result = this.fallbackAnalysis(text);
+          onChunk(JSON.stringify(result), true);
+          resolve(result);
+        });
+      });
+    } catch (error) {
+      console.error('Streaming LLM error:', error.message);
+      const result = this.fallbackAnalysis(text);
+      onChunk(JSON.stringify(result), true);
+      return result;
+    }
+  }
 }
 
 module.exports = new LLMService();

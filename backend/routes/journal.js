@@ -2,14 +2,16 @@ const express = require('express');
 const router = express.Router();
 const Journal = require('../models/Journal');
 const llmService = require('../services/llmService');
+const cacheService = require('../services/cacheService');
 const {
   validateJournalEntry,
   validateAnalyzeInput,
   validateUserIdParam
 } = require('../middleware/validate');
+const { writeLimiter, analyzeLimiter } = require('../middleware/rateLimit');
 
 // POST /api/journal — Create a new journal entry
-router.post('/', validateJournalEntry, async (req, res) => {
+router.post('/', writeLimiter, validateJournalEntry, async (req, res) => {
   try {
     const { userId, ambience, text } = req.body;
 
@@ -39,17 +41,72 @@ router.get('/:userId', validateUserIdParam, async (req, res) => {
   }
 });
 
-// POST /api/journal/analyze — Analyze emotion in text using LLM
-router.post('/analyze', validateAnalyzeInput, async (req, res) => {
+// POST /api/journal/analyze — Analyze emotion in text using LLM (with caching)
+router.post('/analyze', analyzeLimiter, validateAnalyzeInput, async (req, res) => {
   try {
     const { text } = req.body;
 
+    // Check cache first
+    const cached = cacheService.get(text);
+    if (cached) {
+      return res.json({ ...cached, cached: true });
+    }
+
     const analysis = await llmService.analyzeEmotion(text);
+
+    // Store in cache
+    cacheService.set(text, analysis);
 
     res.json(analysis);
   } catch (error) {
     console.error('Error analyzing text:', error);
     res.status(500).json({ error: 'Failed to analyze text' });
+  }
+});
+
+// POST /api/journal/analyze/stream — Streaming LLM analysis via SSE
+router.post('/analyze/stream', analyzeLimiter, validateAnalyzeInput, async (req, res) => {
+  try {
+    const { text } = req.body;
+
+    // Check cache first — return immediately as SSE
+    const cached = cacheService.get(text);
+    if (cached) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.write(`data: ${JSON.stringify({ ...cached, cached: true, done: true })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Set up SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    await llmService.analyzeEmotionStream(text, (chunk, isDone) => {
+      if (isDone) {
+        try {
+          const parsed = JSON.parse(chunk);
+          cacheService.set(text, parsed);
+          res.write(`data: ${JSON.stringify({ ...parsed, done: true })}\n\n`);
+        } catch {
+          res.write(`data: ${JSON.stringify({ chunk, done: true })}\n\n`);
+        }
+        res.end();
+      } else {
+        res.write(`data: ${JSON.stringify({ chunk, done: false })}\n\n`);
+      }
+    });
+  } catch (error) {
+    console.error('Error in streaming analysis:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to analyze text' });
+    } else {
+      res.write(`data: ${JSON.stringify({ error: 'Stream failed', done: true })}\n\n`);
+      res.end();
+    }
   }
 });
 

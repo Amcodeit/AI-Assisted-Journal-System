@@ -7,17 +7,31 @@
 │  React SPA  │  ──────────>  │  Express API      │  ────────────>  │ MongoDB │
 │  (port 3000)│  <──────────  │  (port 5000)      │  <────────────  │         │
 └─────────────┘               │                    │                 └─────────┘
+                              │  Rate Limiter      │
+                              │  ┌──────────────┐  │
+                              │  │ Cache Service │  │
+                              │  └──────┬───────┘  │
                               │  POST /journal     │
                               │  GET  /journal/:id │
                               │  POST /analyze ────────> HuggingFace LLM API
+                              │  POST /analyze/stream ──> (SSE streaming)
                               │  GET  /insights/:id│       (or fallback)
                               └──────────────────┘
 ```
 
 **Data Flow:**
-1. User writes a journal entry → `POST /api/journal` → stored in MongoDB.
-2. User requests emotion analysis → `POST /api/journal/analyze` → text sent to HuggingFace Mistral-7B → structured emotion/keywords/summary returned.
-3. User views insights → `GET /api/journal/insights/:userId` → aggregated from stored entries.
+1. User writes a journal entry → `POST /api/journal` → rate limited (10/min) → stored in MongoDB.
+2. User requests emotion analysis → `POST /api/journal/analyze` → rate limited (5/min) → cache checked → if miss, text sent to HuggingFace Mistral-7B → result cached → structured emotion/keywords/summary returned.
+3. User requests streaming analysis → `POST /api/journal/analyze/stream` → same as above but response streamed via Server-Sent Events.
+4. User views insights → `GET /api/journal/insights/:userId` → aggregated from stored entries.
+
+### Implemented Bonus Features
+
+| Feature | File(s) | Description |
+|---|---|---|
+| **Streaming LLM** | `services/llmService.js`, `routes/journal.js` | `analyzeEmotionStream()` method streams HuggingFace response via SSE. New `/analyze/stream` endpoint. Frontend toggles between standard and streaming. |
+| **Analysis Caching** | `services/cacheService.js`, `routes/journal.js` | In-memory cache keyed on SHA-256 hash of normalized text. 24h TTL, 1000-entry cap. Both `/analyze` and `/analyze/stream` check cache before calling LLM. |
+| **Rate Limiting** | `middleware/rateLimit.js`, `server.js` | Three tiers: general (100 req/min on all `/api/`), write (10/min on `POST /journal`), analyze (5/min on analyze endpoints). Uses `express-rate-limit`. |
 
 ---
 
@@ -68,28 +82,34 @@
 
 ## 3. How would you cache repeated analysis?
 
-### Content-Based Caching with Redis
+### Content-Based Caching (Implemented)
+
+The system already implements in-memory caching in `services/cacheService.js`:
 
 ```
-┌──────────┐    cache hit     ┌───────┐
-│  /analyze ├──────────────>  │ Redis │ ──> return cached result
-│  endpoint │    cache miss   │       │
-│           ├──────────────>  │       │
-│           │                 └───────┘
-│           │                     │
-│           │    call LLM         │ store result
+┌──────────┐    cache hit     ┌─────────────────┐
+│  /analyze ├──────────────>  │ In-Memory Cache  │ ──> return cached result
+│  endpoint │    cache miss   │ (SHA-256 keyed)  │
+│           ├──────────────>  │                   │
+│           │                 └─────────────────┘
+│           │                         │
+│           │    call LLM             │ store result
 │           ├──────────────>  HuggingFace
-│           │<── result ────      │
-│           ├── store ──────> Redis
+│           │<── result ────          │
+│           ├── store ──────> Cache (24h TTL)
 └──────────┘
 ```
 
-**Implementation:**
-1. **Normalize** the input text: lowercase, strip extra whitespace, remove punctuation.
+**Current Implementation:**
+1. **Normalize** the input text: lowercase, trim, collapse whitespace.
 2. **Hash** the normalized text using SHA-256 to create a cache key.
-3. **Check Redis** for the key. If found, return the cached analysis immediately.
-4. If not found, call the LLM, store the result in Redis with a **TTL of 24 hours**.
-5. For near-duplicates: use **SimHash** or **MinHash** to detect texts that are substantially similar (>90% overlap) and return the cached result of the closest match.
+3. **Check cache** for the key. If found and not expired, return immediately with `cached: true`.
+4. If not found, call the LLM, store the result with a 24-hour TTL.
+5. Cache is capped at 1000 entries with oldest-first eviction.
+
+**Production Upgrade — Redis:**
+- Replace the in-memory `Map` with Redis for shared cache across multiple API server instances.
+- Use **SimHash** or **MinHash** to detect near-duplicate texts (>90% overlap) and return the cached result of the closest match.
 
 **Benefits:**
 - Eliminates redundant LLM calls for identical journal texts.
@@ -120,10 +140,13 @@
 - Already implemented: **input validation middleware** that sanitizes all inputs, validates types, enforces length limits, and strips MongoDB operator characters (`$`) to prevent NoSQL injection.
 - Use parameterized queries (Mongoose does this by default) — no raw string concatenation in queries.
 
-### Rate Limiting & Abuse Prevention
+### Rate Limiting & Abuse Prevention (Implemented)
 
-- Rate limit all endpoints (e.g., 100 requests/min per IP) using `express-rate-limit`.
-- Stricter limits on write endpoints (`POST /journal`: 10/min, `POST /analyze`: 5/min).
+- **Already implemented** with three tiers in `middleware/rateLimit.js`:
+  - General: 100 requests/min per IP on all `/api/` routes
+  - Write: 10 requests/min per IP on `POST /journal`
+  - Analyze: 5 requests/min per IP on `POST /analyze` and `POST /analyze/stream`
+- Uses `express-rate-limit` with standard rate-limit headers.
 
 ### Data Minimization & Access Control
 

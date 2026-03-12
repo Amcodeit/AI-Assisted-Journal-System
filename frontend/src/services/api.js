@@ -19,4 +19,29 @@ export const analyzeText = (text) =>
 export const getInsights = (userId) =>
   api.get(`/journal/insights/${encodeURIComponent(userId)}`);
 
+export const analyzeTextStream = async (text, onChunk) => {
+  const response = await fetch(`${API_BASE}/journal/analyze/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text })
+  });
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const raw = decoder.decode(value);
+    const lines = raw.split('\n').filter(l => l.startsWith('data: '));
+    for (const line of lines) {
+      try {
+        const data = JSON.parse(line.slice(6));
+        onChunk(data);
+      } catch { /* skip malformed chunks */ }
+    }
+  }
+};
+
 export default api;

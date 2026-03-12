@@ -16,15 +16,19 @@ aryavX/
 │   ├── config/database.js        # MongoDB connection
 │   ├── models/Journal.js         # Mongoose schema
 │   ├── routes/journal.js         # All API endpoints
-│   ├── services/llmService.js    # LLM integration + fallback
-│   ├── middleware/validate.js    # Input validation & sanitization
+│   ├── services/
+│   │   ├── llmService.js         # LLM integration + fallback + streaming
+│   │   └── cacheService.js       # In-memory analysis cache (SHA-256 keyed)
+│   ├── middleware/
+│   │   ├── validate.js           # Input validation & sanitization
+│   │   └── rateLimit.js          # Rate limiting (general, write, analyze)
 │   ├── server.js                 # Express entry point
 │   ├── package.json
 │   └── .env
 ├── frontend/
 │   ├── src/
 │   │   ├── components/           # React UI components
-│   │   ├── services/api.js       # Axios API wrapper
+│   │   ├── services/api.js       # Axios API wrapper + SSE streaming
 │   │   ├── App.jsx               # Main layout
 │   │   └── App.css               # Styles
 │   └── package.json
@@ -120,7 +124,7 @@ The frontend opens at `http://localhost:XXXX`.
 ]
 ```
 
-### POST `/api/journal/analyze` — Analyze Emotion
+### POST `/api/journal/analyze` — Analyze Emotion (with caching)
 
 **Request:**
 ```json
@@ -137,6 +141,20 @@ The frontend opens at `http://localhost:XXXX`.
   "summary": "User experienced relaxation during the forest session"
 }
 ```
+
+Repeated requests with the same text return a cached result with `"cached": true`.
+
+### POST `/api/journal/analyze/stream` — Streaming Analyze (SSE)
+
+Same request body as `/analyze`. Returns Server-Sent Events:
+
+```
+data: {"chunk": "Emotion: calm\n", "done": false}
+data: {"chunk": "Keywords: rain, nature...", "done": false}
+data: {"emotion": "calm", "keywords": [...], "summary": "...", "done": true}
+```
+
+The frontend "Stream response" checkbox toggles between standard and streaming modes.
 
 ### GET `/api/journal/insights/:userId` — User Insights
 
@@ -166,8 +184,16 @@ The single-page UI provides four panels:
 
 1. **Write Journal Entry** — Enter User ID, select ambience (forest/ocean/mountain), write text, and save.
 2. **Previous Entries** — Enter User ID and load all past entries.
-3. **Analyze Emotion** — Paste text and click Analyze to get emotion, keywords, and summary.
+3. **Analyze Emotion** — Paste text and click Analyze to get emotion, keywords, and summary. Toggle "Stream response" for real-time SSE streaming. Cached results are indicated with a ⚡ badge.
 4. **Insights** — Enter User ID and view aggregated stats: total entries, top emotion, most used ambience, and recent keywords.
+
+## Bonus Features
+
+| Feature | Implementation |
+|---|---|
+| **Streaming LLM Response** | `POST /api/journal/analyze/stream` returns Server-Sent Events. Frontend toggles between standard and streaming modes. |
+| **Caching Analysis Results** | In-memory SHA-256-keyed cache with 24h TTL and 1000-entry cap. Identical texts skip the LLM entirely. |
+| **Rate Limiting** | Three tiers via `express-rate-limit`: general (100/min), write (10/min), analyze (5/min). |
 
 ## Tech Stack
 
