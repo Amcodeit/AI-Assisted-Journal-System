@@ -9,7 +9,7 @@ export default function App() {
   return (
     <div className="app">
       <header>
-        <h1>AryavX Journal</h1>
+        <h1>AI-Assisted Journal System</h1>
         <p>AI-powered journal for immersive nature sessions</p>
       </header>
       <main>
