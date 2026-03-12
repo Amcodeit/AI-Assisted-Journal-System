@@ -10,8 +10,8 @@ const api = axios.create({
 export const createEntry = (userId, ambience, text) =>
   api.post('/journal', { userId, ambience, text });
 
-export const getEntries = (userId) =>
-  api.get(`/journal/${encodeURIComponent(userId)}`);
+export const getEntries = (userId, page = 1, limit = 20) =>
+  api.get(`/journal/${encodeURIComponent(userId)}?page=${page}&limit=${limit}`);
 
 export const analyzeText = (text) =>
   api.post('/journal/analyze', { text });

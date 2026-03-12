@@ -1,15 +1,14 @@
 import React, { useState } from 'react';
 import { getInsights } from '../services/api';
 
-export default function InsightsPanel() {
-  const [userId, setUserId] = useState('');
+export default function InsightsPanel({ userId }) {
   const [insights, setInsights] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
   const loadInsights = async () => {
-    if (!userId.trim()) {
-      setError('Enter a User ID');
+    if (!userId?.trim()) {
+      setError('Enter a User ID above');
       return;
     }
     setLoading(true);
@@ -29,12 +28,6 @@ export default function InsightsPanel() {
     <div className="card">
       <h2>Insights</h2>
       <div className="inline-form">
-        <input
-          type="text"
-          value={userId}
-          onChange={(e) => setUserId(e.target.value)}
-          placeholder="User ID"
-        />
         <button onClick={loadInsights} disabled={loading}>
           {loading ? 'Loading...' : 'Load Insights'}
         </button>

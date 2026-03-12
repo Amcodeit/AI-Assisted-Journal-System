@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { createEntry } from '../services/api';
 
-export default function JournalForm({ onEntryCreated }) {
-  const [userId, setUserId] = useState('');
+export default function JournalForm({ userId }) {
   const [ambience, setAmbience] = useState('forest');
   const [text, setText] = useState('');
   const [status, setStatus] = useState(null);
@@ -10,17 +9,16 @@ export default function JournalForm({ onEntryCreated }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!userId.trim() || !text.trim()) {
+    if (!userId?.trim() || !text.trim()) {
       setStatus({ type: 'error', msg: 'User ID and text are required' });
       return;
     }
     setLoading(true);
     setStatus(null);
     try {
-      const res = await createEntry(userId.trim(), ambience, text.trim());
+      await createEntry(userId.trim(), ambience, text.trim());
       setStatus({ type: 'success', msg: 'Entry saved!' });
       setText('');
-      if (onEntryCreated) onEntryCreated(res.data);
     } catch (err) {
       const msg = err.response?.data?.error || 'Failed to save entry';
       setStatus({ type: 'error', msg });
@@ -33,15 +31,6 @@ export default function JournalForm({ onEntryCreated }) {
     <div className="card">
       <h2>Write Journal Entry</h2>
       <form onSubmit={handleSubmit}>
-        <label>
-          User ID
-          <input
-            type="text"
-            value={userId}
-            onChange={(e) => setUserId(e.target.value)}
-            placeholder="e.g. 123"
-          />
-        </label>
         <label>
           Ambience
           <select value={ambience} onChange={(e) => setAmbience(e.target.value)}>

@@ -18,6 +18,22 @@ router.post('/', writeLimiter, validateJournalEntry, async (req, res) => {
     const entry = await Journal.create({ userId, ambience, text });
 
     res.status(201).json(entry);
+
+    // Fire-and-forget: auto-analyze and persist results to the entry
+    (async () => {
+      try {
+        const cached = cacheService.get(text);
+        const analysis = cached || await llmService.analyzeEmotion(text);
+        if (!cached) cacheService.set(text, analysis);
+        await Journal.findByIdAndUpdate(entry._id, {
+          emotion: analysis.emotion,
+          keywords: analysis.keywords,
+          summary: analysis.summary
+        });
+      } catch (err) {
+        console.error('Background analysis failed:', err.message);
+      }
+    })();
   } catch (error) {
     if (error.name === 'ValidationError') {
       return res.status(400).json({ error: error.message });
@@ -27,14 +43,29 @@ router.post('/', writeLimiter, validateJournalEntry, async (req, res) => {
   }
 });
 
-// GET /api/journal/:userId — Get all entries for a user
+// GET /api/journal/:userId — Get all entries for a user (paginated)
 router.get('/:userId', validateUserIdParam, async (req, res) => {
   try {
-    const entries = await Journal.find({ userId: req.params.userId })
-      .sort({ createdAt: -1 })
-      .lean();
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const skip = (page - 1) * limit;
 
-    res.json(entries);
+    const [entries, totalEntries] = await Promise.all([
+      Journal.find({ userId: req.params.userId })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Journal.countDocuments({ userId: req.params.userId })
+    ]);
+
+    res.json({
+      entries,
+      page,
+      limit,
+      totalEntries,
+      totalPages: Math.ceil(totalEntries / limit)
+    });
   } catch (error) {
     console.error('Error fetching entries:', error);
     res.status(500).json({ error: 'Failed to fetch journal entries' });
